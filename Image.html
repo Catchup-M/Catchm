@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Photo Gallery Viewer</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden; 
+      overscroll-behavior: none;
+      touch-action: none;
+    }
+    * {
+      -webkit-user-select: none;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useRef, useCallback, useEffect } = React;
+
+    // --- SVG Icon Components ---
+
+    const ChevronLeft = ({ size = 24 }) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="19" y1="12" x2="5" y2="12"></line>
+        <polyline points="12 19 5 12 12 5"></polyline>
+      </svg>
+    );
+
+    const ChevronRight = ({ size = 24 }) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="9 18 15 12 9 6"></polyline>
+      </svg>
+    );
+
+    const Share2 = ({ size = 24 }) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="18" cy="5" r="3"></circle>
+        <circle cx="6" cy="12" r="3"></circle>
+        <circle cx="18" cy="19" r="3"></circle>
+        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+        <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+      </svg>
+    );
+
+    const MoreVertical = ({ size = 24 }) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="1"></circle>
+        <circle cx="12" cy="5" r="1"></circle>
+        <circle cx="12" cy="19" r="1"></circle>
+      </svg>
+    );
+
+    // --- Main Gallery Component ---
+
+    const PhotoGalleryViewer = () => {
+      const [currentIndex, setCurrentIndex] = useState(0);
+      const [translateX, setTranslateX] = useState(0);
+      const [isDragging, setIsDragging] = useState(false);
+      const [isTransitioning, setIsTransitioning] = useState(false);
+      const [imageZoom, setImageZoom] = useState(1);
+      const [imageTranslateX, setImageTranslateX] = useState(0);
+      const [imageTranslateY, setImageTranslateY] = useState(0);
+      const [isPinching, setIsPinching] = useState(false);
+      const [lastTap, setLastTap] = useState(0);
+
+      const touchStartX = useRef(0);
+      const touchStartY = useRef(0);
+      const initialPinchDistance = useRef(null);
+      const initialZoom = useRef(1);
+      const lastTouchX = useRef(0);
+      const lastTouchY = useRef(0);
+      const imageRef = useRef(null);
+      const containerRef = useRef(null);
+      
+      // Mock images - replace with your actual image URLs
+      const images = [
+        "https://images.unsplash.com/photo-1682687220742-aba13b6e50ba?w=800",
+        "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800",
+        "https://images.unsplash.com/photo-1472214103451-9374bd1c798e?w=800"
+      ];
+
+      const totalPhotos = images.length;
+
+      const getCurrentImage = (index) => {
+        return images[index];
+      };
+
+      const resetZoomState = useCallback(() => {
+        setImageZoom(1);
+        setImageTranslateX(0);
+        setImageTranslateY(0);
+      }, []);
+
+      // Reset zoom whenever the image index changes
+      useEffect(() => {
+        resetZoomState();
+      }, [currentIndex, resetZoomState]);
+
+      // Prevent default touch behaviors
+      useEffect(() => {
+        const preventDefaults = (e) => {
+          if (e.touches && e.touches.length > 1) {
+            e.preventDefault();
+          }
+        };
+        
+        document.addEventListener('touchmove', preventDefaults, { passive: false });
+        document.addEventListener('gesturestart', (e) => e.preventDefault());
+        document.addEventListener('gesturechange', (e) => e.preventDefault());
+        document.addEventListener('gestureend', (e) => e.preventDefault());
+        
+        return () => {
+          document.removeEventListener('touchmove', preventDefaults);
+        };
+      }, []);
+
+      const getBounds = () => {
+        if (!imageRef.current || !containerRef.current) return { maxTranslateX: 0, maxTranslateY: 0 };
+        
+        const containerWidth = containerRef.current.clientWidth;
+        const containerHeight = containerRef.current.clientHeight;
+        
+        // Get actual rendered image dimensions
+        const imgRect = imageRef.current.getBoundingClientRect();
+        const imageWidth = imgRect.width / imageZoom;
+        const imageHeight = imgRect.height / imageZoom;
+        
+        const zoomedWidth = imageWidth * imageZoom;
+        const zoomedHeight = imageHeight * imageZoom;
+        
+        const maxTranslateX = Math.max(0, (zoomedWidth - containerWidth) / 2);
+        const maxTranslateY = Math.max(0, (zoomedHeight - containerHeight) / 2);
+        
+        return { maxTranslateX, maxTranslateY };
+      };
+
+      // --- Gallery Navigation Handlers (for desktop arrows) ---
+      const handlePrevious = () => {
+        if (currentIndex > 0 && !isTransitioning) {
+          setIsTransitioning(true);
+          setCurrentIndex(currentIndex - 1);
+          setTimeout(() => setIsTransitioning(false), 300);
+        }
+      };
+
+      const handleNext = () => {
+        if (currentIndex < totalPhotos - 1 && !isTransitioning) {
+          setIsTransitioning(true);
+          setCurrentIndex(currentIndex + 1);
+          setTimeout(() => setIsTransitioning(false), 300);
+        }
+      };
+
+      // --- Touch Event Handlers ---
+      const handleTouchStart = (e) => {
+        if (isTransitioning) return;
+        
+        if (e.touches.length === 2) {
+          // Pinch start
+          e.preventDefault();
+          setIsPinching(true);
+          setIsDragging(false);
+          
+          const touch1 = e.touches[0];
+          const touch2 = e.touches[1];
+          const distance = Math.hypot(
+            touch2.clientX - touch1.clientX,
+            touch2.clientY - touch1.clientY
+          );
+          
+          initialPinchDistance.current = distance;
+          initialZoom.current = imageZoom;
+        } else if (e.touches.length === 1) {
+          const touch = e.touches[0];
+          
+          if (imageZoom > 1) {
+            // Zoomed: Prepare for pan
+            lastTouchX.current = touch.clientX;
+            lastTouchY.current = touch.clientY;
+          } else {
+            // Not zoomed: Prepare for gallery swipe
+            touchStartX.current = touch.clientX;
+            touchStartY.current = touch.clientY;
+            setIsDragging(true);
+          }
+          setIsPinching(false);
+        }
+      };
+      
+      const handleTouchMove = (e) => {
+        if (isTransitioning) return;
+
+        if (e.touches.length === 2 && isPinching) {
+          // --- Pinch-to-Zoom Logic ---
+          e.preventDefault();
+          e.stopPropagation();
+          
+          const touch1 = e.touches[0];
+          const touch2 = e.touches[1];
+          const distance = Math.hypot(
+            touch2.clientX - touch1.clientX,
+            touch2.clientY - touch1.clientY
+          );
+          
+          if (initialPinchDistance.current) {
+            const scale = distance / initialPinchDistance.current;
+            const newZoom = Math.max(1, Math.min(3, initialZoom.current * scale));
+            setImageZoom(newZoom);
+          }
+        } else if (e.touches.length === 1) {
+          const touch = e.touches[0];
+          const { maxTranslateX, maxTranslateY } = getBounds();
+
+          if (imageZoom > 1 && !isPinching) {
+            // --- Pan (Drag when Zoomed) Logic ---
+            e.preventDefault();
+            
+            const deltaX = touch.clientX - lastTouchX.current;
+            const deltaY = touch.clientY - lastTouchY.current;
+            
+            let newTranslateX = imageTranslateX + deltaX;
+            let newTranslateY = imageTranslateY + deltaY;
+
+            newTranslateX = Math.max(-maxTranslateX, Math.min(maxTranslateX, newTranslateX));
+            newTranslateY = Math.max(-maxTranslateY, Math.min(maxTranslateY, newTranslateY));
+            
+            setImageTranslateX(newTranslateX);
+            setImageTranslateY(newTranslateY);
+            
+            lastTouchX.current = touch.clientX;
+            lastTouchY.current = touch.clientY;
+          } else if (isDragging && imageZoom === 1) {
+            // --- Gallery Swipe Logic ---
+            const currentX = touch.clientX;
+            const diff = currentX - touchStartX.current;
+            setTranslateX(diff);
+            
+            if (Math.abs(touch.clientY - touchStartY.current) < Math.abs(diff)) {
+              e.preventDefault();
+            }
+          }
+        }
+      };
+      
+      const handleTouchEnd = (e) => {
+        if (isPinching) {
+          initialPinchDistance.current = null;
+          initialZoom.current = imageZoom;
+          setIsPinching(false);
+          
+          // Clamp bounds after pinch ends
+          const { maxTranslateX, maxTranslateY } = getBounds();
+          let newTranslateX = Math.max(-maxTranslateX, Math.min(maxTranslateX, imageTranslateX));
+          let newTranslateY = Math.max(-maxTranslateY, Math.min(maxTranslateY, imageTranslateY));
+          setImageTranslateX(newTranslateX);
+          setImageTranslateY(newTranslateY);
+          return;
+        }
+        
+        if (!isDragging || imageZoom > 1) return;
+        
+        setIsDragging(false);
+        const swipeThreshold = 75;
+
+        if (Math.abs(translateX) > swipeThreshold) {
+          setIsTransitioning(true);
+          if (translateX < 0 && currentIndex < totalPhotos - 1) {
+            setCurrentIndex(currentIndex + 1);
+          } else if (translateX > 0 && currentIndex > 0) {
+            setCurrentIndex(currentIndex - 1);
+          }
+          setTimeout(() => setIsTransitioning(false), 300);
+        }
+        
+        setTranslateX(0);
+      };
+      
+      // --- Mouse Event Handlers ---
+      const handleMouseDown = (e) => {
+        if (e.button !== 0) return;
+        
+        if (imageZoom > 1) {
+          lastTouchX.current = e.clientX;
+          lastTouchY.current = e.clientY;
+        } else {
+          touchStartX.current = e.clientX;
+          touchStartY.current = e.clientY;
+          setIsDragging(true);
+        }
+      };
+
+      const handleMouseMove = (e) => {
+        if (!isDragging && imageZoom === 1) return;
+        
+        const { maxTranslateX, maxTranslateY } = getBounds();
+
+        if (imageZoom > 1) {
+          const deltaX = e.clientX - lastTouchX.current;
+          const deltaY = e.clientY - lastTouchY.current;
+          
+          let newTranslateX = imageTranslateX + deltaX;
+          let newTranslateY = imageTranslateY + deltaY;
+
+          newTranslateX = Math.max(-maxTranslateX, Math.min(maxTranslateX, newTranslateX));
+          newTranslateY = Math.max(-maxTranslateY, Math.min(maxTranslateY, newTranslateY));
+          
+          setImageTranslateX(newTranslateX);
+          setImageTranslateY(newTranslateY);
+          
+          lastTouchX.current = e.clientX;
+          lastTouchY.current = e.clientY;
+        } else if (isDragging) {
+          const currentX = e.clientX;
+          const diff = currentX - touchStartX.current;
+          setTranslateX(diff);
+        }
+      };
+
+      const handleMouseUp = () => {
+        if (!isDragging || imageZoom > 1) return;
+        
+        setIsDragging(false);
+        const swipeThreshold = 75;
+
+        if (Math.abs(translateX) > swipeThreshold) {
+          setIsTransitioning(true);
+          if (translateX < 0 && currentIndex < totalPhotos - 1) {
+            setCurrentIndex(currentIndex + 1);
+          } else if (translateX > 0 && currentIndex > 0) {
+            setCurrentIndex(currentIndex - 1);
+          }
+          setTimeout(() => setIsTransitioning(false), 300);
+        }
+        
+        setTranslateX(0);
+      };
+
+      const handleMouseLeave = () => {
+        if (isDragging) handleMouseUp();
+      };
+      
+      // --- Double-Tap Zoom Logic ---
+      const handleImageClick = (e) => {
+        const now = Date.now();
+        if (now - lastTap < 300) {
+          const newZoom = imageZoom === 1 ? 2 : 1;
+          setImageZoom(newZoom);
+          if (newZoom === 1) {
+            setImageTranslateX(0);
+            setImageTranslateY(0);
+          }
+        }
+        setLastTap(now);
+      };
+
+      const getWindowWidth = () => {
+        return containerRef.current ? containerRef.current.offsetWidth : window.innerWidth;
+      };
+
+      return (
+        <div className="relative w-full h-screen bg-black flex flex-col overflow-hidden">
+          {/* Header */}
+          <div className="absolute top-0 left-0 right-0 z-20 bg-gradient-to-b from-black/80 to-transparent pointer-events-none">
+            <div className="flex items-center justify-between px-4 py-4 pointer-events-auto">
+              <button className="text-white p-2 hover:bg-white/10 rounded-full transition">
+                <ChevronLeft size={28} />
+              </button>
+              
+              <div className="flex-1 text-center">
+                <h1 className="text-white text-xl font-semibold">Vavia's</h1>
+                <p className="text-white/80 text-sm">Nov 16 at 2:17 PM</p>
+              </div>
+              
+              <div className="flex gap-2">
+                <button className="text-white p-2 hover:bg-white/10 rounded-full transition">
+                  <Share2 size={24} />
+                </button>
+                <button className="text-white p-2 hover:bg-white/10 rounded-full transition">
+                  <MoreVertical size={24} />
+                </button>
+              </div>
+            </div>
+
+            {/* Photo Counter */}
+            <div className="flex justify-center pb-6">
+              <div className="bg-black/40 backdrop-blur-sm rounded-full px-4 py-2">
+                <p className="text-white text-sm font-medium">
+                  {currentIndex + 1} of {totalPhotos}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Main Image Container */}
+          <div 
+            ref={containerRef}
+            className={`flex-1 flex items-center justify-center relative overflow-hidden ${imageZoom > 1 ? 'cursor-move' : 'cursor-grab active:cursor-grabbing'}`}
+            style={{ touchAction: 'none' }}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseLeave}
+            onClick={handleImageClick}
+          >
+            {/* Current Image */}
+            <div 
+              className="absolute inset-0 flex items-center justify-center"
+              style={{
+                transform: imageZoom === 1 && isDragging && translateX !== 0 
+                  ? `scale(${1 - Math.abs(translateX) / getWindowWidth() * 0.1})` 
+                  : 'scale(1)',
+                transition: isDragging || isPinching ? 'none' : 'transform 0.3s ease-out'
+              }}
+            >
+              <img 
+                ref={imageRef}
+                src={getCurrentImage(currentIndex)} 
+                alt={`Photo ${currentIndex + 1}`} 
+                className="max-w-full max-h-full object-contain pointer-events-none" 
+                draggable="false"
+                style={{
+                  transform: `translate(${imageTranslateX}px, ${imageTranslateY}px) scale(${imageZoom})`,
+                  transition: isPinching || (imageZoom > 1 && lastTouchX.current) ? 'none' : 'transform 300ms ease-out',
+                  transformOrigin: 'center center'
+                }}
+              />
+            </div>
+
+            {/* Next Image */}
+            {currentIndex < totalPhotos - 1 && translateX < 0 && imageZoom === 1 && (
+              <div 
+                className="absolute inset-0 flex items-center justify-center pointer-events-none"
+                style={{
+                  transform: `translateX(${getWindowWidth() + translateX}px)`,
+                  transition: isDragging ? 'none' : 'transform 0.3s ease-out'
+                }}
+              >
+                <img 
+                  src={getCurrentImage(currentIndex + 1)} 
+                  alt="Next Photo" 
+                  className="max-w-full max-h-full object-contain" 
+                  draggable="false"
+                />
+              </div>
+            )}
+
+            {/* Previous Image */}
+            {currentIndex > 0 && translateX > 0 && imageZoom === 1 && (
+              <div 
+                className="absolute inset-0 flex items-center justify-center pointer-events-none"
+                style={{
+                  transform: `translateX(${-getWindowWidth() + translateX}px)`,
+                  transition: isDragging ? 'none' : 'transform 0.3s ease-out'
+                }}
+              >
+                <img 
+                  src={getCurrentImage(currentIndex - 1)} 
+                  alt="Previous Photo" 
+                  className="max-w-full max-h-full object-contain" 
+                  draggable="false"
+                />
+              </div>
+            )}
+
+            {/* Navigation Arrows (Desktop) */}
+            <button 
+              onClick={handlePrevious}
+              disabled={currentIndex === 0 || isTransitioning || imageZoom > 1}
+              className="hidden md:block absolute left-4 text-white p-2 bg-black/30 hover:bg-black/50 rounded-full transition disabled:opacity-30 disabled:cursor-not-allowed z-30 pointer-events-auto"
+            >
+              <ChevronLeft size={32} />
+            </button>
+            
+            <button 
+              onClick={handleNext}
+              disabled={currentIndex === totalPhotos - 1 || isTransitioning || imageZoom > 1}
+              className="hidden md:block absolute right-4 text-white p-2 bg-black/30 hover:bg-black/50 rounded-full transition disabled:opacity-30 disabled:cursor-not-allowed z-30 pointer-events-auto"
+            >
+              <ChevronRight size={32} />
+            </button>
+          </div>
+
+          {/* Caption Footer */}
+          <div className="absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-black/90 to-transparent pointer-events-none">
+            <div className="px-6 py-6">
+              <p className="text-white text-lg">
+                Got a new pet 🤷
+              </p>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    ReactDOM.render(<PhotoGalleryViewer />, document.getElementById('root'));
+  </script>
+</body>
+</html>
